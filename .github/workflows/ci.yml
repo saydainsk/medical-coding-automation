@@ -17,10 +17,21 @@ jobs:
       - name: Upgrade build tooling
         run: python -m pip install --upgrade pip setuptools wheel
 
-      # Install only what tests actually use (skip streamlit & uvicorn extras)
-      - name: Install test dependencies
+      - name: Install dependencies (pinned)
+        run: pip install -r requirements.txt
+
+      - name: Show versions
         run: |
-          pip install "fastapi>=0.110" "pydantic>=2" numpy pandas scikit-learn regex python-dotenv pytest
+          python - <<'PY'
+          import sys, platform, pandas, numpy, sklearn, fastapi, pytest
+          print("python:", sys.version)
+          print("platform:", platform.platform())
+          print("pandas:", pandas.__version__)
+          print("numpy:", numpy.__version__)
+          print("sklearn:", sklearn.__version__)
+          print("fastapi:", fastapi.__version__)
+          print("pytest:", pytest.__version__)
+          PY
 
       - name: Show workspace tree (debug)
         run: |
@@ -36,8 +47,6 @@ jobs:
           import pandas as pd, pathlib
           p = pathlib.Path("data/codebooks/icd10cm_codes.csv")
           print("CSV exists:", p.exists(), "->", p)
-          if not p.exists():
-              raise SystemExit("Missing data/codebooks/icd10cm_codes.csv")
           df = pd.read_csv(p)
           assert {"code","short_title","long_title"} <= set(df.columns)
           print("CSV rows:", len(df))
@@ -53,5 +62,8 @@ jobs:
           print("Computed DATA_PATH:", data_path, "exists:", data_path.exists())
           PY
 
-      - name: Run tests (verbose)
-        run: pytest -vv
+      - name: Test discovery
+        run: pytest -q --collect-only
+
+      - name: Run tests
+        run: pytest -q -vv
