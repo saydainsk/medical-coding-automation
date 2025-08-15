@@ -6,7 +6,7 @@ from typing import List, Tuple
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -25,7 +25,9 @@ logging.basicConfig(
 log = logging.getLogger("medical-coding-api")
 
 # ---------- Load codebook ----------
-DATA_PATH = Path(__file__).resolve().parents[2] / "data" / "codebooks" / "icd10cm_codes.csv"
+DATA_PATH = (
+    Path(__file__).resolve().parents[2] / "data" / "codebooks" / "icd10cm_codes.csv"
+)
 codes_df = pd.read_csv(DATA_PATH)
 
 code_texts: List[str] = (
@@ -46,6 +48,8 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=False,  # safer with "*" origins
 )
+
+
 # ---------- Core logic ----------
 def retrieve_candidates(note: str, top_k: int) -> List[Tuple[int, float]]:
     secs = sectionize(note)
@@ -63,7 +67,7 @@ def retrieve_candidates(note: str, top_k: int) -> List[Tuple[int, float]]:
         weights = [1.0]
 
     sims = cosine_similarity(vectorizer.transform(texts), code_matrix)  # [S x C]
-    sims = (np.array(weights)[:, None] * sims)  # section weighting
+    sims = np.array(weights)[:, None] * sims  # section weighting
     scores = sims.max(axis=0)  # best-matching section per code
 
     # Negation suppression
@@ -77,14 +81,18 @@ def retrieve_candidates(note: str, top_k: int) -> List[Tuple[int, float]]:
 
     order = np.argsort(-scores)
     return [(int(i), float(scores[i])) for i in order[:top_k] if scores[i] > 0]
+
+
 # ---------- Endpoints ----------
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
+
 @app.get("/version")
 def version():
     return {"version": APP_VERSION}
+
 
 @app.post("/predict", response_model=PredictResponse)
 def predict(req: PredictRequest):
@@ -107,3 +115,21 @@ def predict(req: PredictRequest):
 
     log.info("predicted", extra={"top_k": topk, "num_candidates": len(cands)})
     return PredictResponse(candidates=cands, model_version=APP_VERSION)
+
+
+@app.get("/codes")
+def codes(limit: int = 5):
+    # Return total code count and a small sample
+    lim = max(0, min(limit, 50))
+    sample = codes_df.head(lim).to_dict(orient="records")
+    return {"count": int(len(codes_df)), "sample": sample}
+
+
+# Optional wrapper to validate input before predict
+
+
+@app.post("/predict_safe", response_model=PredictResponse)
+def predict_safe(req: PredictRequest):
+    if not req.note_text or not req.note_text.strip():
+        raise HTTPException(status_code=422, detail="note_text is empty")
+    return predict(req)
