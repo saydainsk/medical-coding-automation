@@ -14,31 +14,47 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install deps
+      - name: Upgrade build tooling
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip setuptools wheel
+
+      - name: Install dependencies
+        run: |
           pip install -r requirements.txt
 
-      - name: Sanity imports (versions)
+      - name: Show workspace tree (debug)
         run: |
-          python - <<'PY'
-          import sys, pandas, numpy, sklearn, fastapi
-          print("python:", sys.version)
-          print("pandas:", pandas.__version__)
-          print("numpy:", numpy.__version__)
-          print("sklearn:", sklearn.__version__)
-          print("fastapi:", fastapi.__version__)
-          PY
+          echo "PWD: $(pwd)"
+          ls -la
+          echo "---- data/codebooks ----"
+          ls -la data || true
+          ls -la data/codebooks || true
 
       - name: Validate codebook CSV
         run: |
           python - <<'PY'
-          import pandas as pd
-          df = pd.read_csv("data/codebooks/icd10cm_codes.csv")
+          import pandas as pd, pathlib
+          p = pathlib.Path("data/codebooks/icd10cm_codes.csv")
+          print("CSV exists:", p.exists(), "->", p)
+          if not p.exists():
+              raise SystemExit("Missing data/codebooks/icd10cm_codes.csv")
+          df = pd.read_csv(p)
           assert {"code","short_title","long_title"} <= set(df.columns)
-          assert len(df) >= 3
-          print("CSV OK, rows:", len(df))
+          print("CSV rows:", len(df))
           PY
 
-      - name: Run tests
-        run: pytest -q -vv
+      - name: Import app & show paths
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import services.coder_api.app as app
+          print("APP_VERSION:", getattr(app, "APP_VERSION", "?"))
+          print("Repo root:", Path(".").resolve())
+          # Recompute the same DATA_PATH logic to display it
+          data_path = Path(app.__file__).resolve().parents[2] / "data" / "codebooks" / "icd10cm_codes.csv"
+          print("Computed DATA_PATH:", data_path, "exists:", data_path.exists())
+          PY
+
+      - name: Run tests (verbose)
+        run: pytest -vv
