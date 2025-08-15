@@ -7,3 +7,5 @@ numpy
 regex
 requests
 streamlit
+python-dotenv
+pytest
