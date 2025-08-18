@@ -2,8 +2,14 @@ import regex as re
 from typing import Dict, List, Tuple
 
 SECTION_HEADERS = [
-    "chief complaint", "history of present illness", "assessment", "plan",
-    "impression", "diagnosis", "procedures", "past medical history"
+    "chief complaint",
+    "history of present illness",
+    "assessment",
+    "plan",
+    "impression",
+    "diagnosis",
+    "procedures",
+    "past medical history",
 ]
 
 NEG_PATTERNS = [
@@ -12,8 +18,10 @@ NEG_PATTERNS = [
     r"\bwithout\s+{term}\b",
 ]
 
+
 def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.lower()).strip()
+
 
 def sectionize(text: str):
     t = normalize(text)
@@ -22,11 +30,12 @@ def sectionize(text: str):
     pat = rf"({'|'.join(map(re.escape, SECTION_HEADERS))})[:\-]"
     for m in re.finditer(pat, t):
         if m.start() > last:
-            chunks.append(("general", t[last:m.start()].strip()))
+            chunks.append(("general", t[last : m.start()].strip()))
         chunks.append((m.group(1), ""))
         last = m.end()
     chunks.append(("general", t[last:].strip()))
     return chunks
+
 
 def is_negated(term: str, context: str) -> bool:
     term_esc = re.escape(term.lower())
@@ -35,8 +44,11 @@ def is_negated(term: str, context: str) -> bool:
             return True
     return False
 
-def extract_rationales(note: str, keywords: List[str]) -> Dict[str, List[Tuple[int,int]]]:
-    spans: Dict[str, List[Tuple[int,int]]] = {}
+
+def extract_rationales(
+    note: str, keywords: List[str]
+) -> Dict[str, List[Tuple[int, int]]]:
+    spans: Dict[str, List[Tuple[int, int]]] = {}
     low = note.lower()
     for kw in keywords:
         spans.setdefault(kw, [])

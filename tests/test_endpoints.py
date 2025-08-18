@@ -12,7 +12,12 @@ def test_codes_endpoint():
     assert "sample" in body and len(body["sample"]) == 3
 
 
-def test_predict_safe_empty_note():
-    r = client.post("/predict_safe", json={"note_text": "   ", "top_k": 5})
+def test_predict_empty_note_returns_422():
+    r = client.post("/predict", json={"note_text": "   ", "top_k": 5})
     assert r.status_code == 422
-    assert r.json()["detail"] == "note_text is empty"
+    body = r.json()
+    # Pydantic v2 validation style: detail is a list of error dicts with "msg"
+    assert isinstance(body.get("detail"), list) and len(body["detail"]) >= 1
+    msgs = [e.get("msg", "") for e in body["detail"] if isinstance(e, dict)]
+    # Message typically like "Value error, note_text is empty"
+    assert any("note_text is empty" in m for m in msgs)
