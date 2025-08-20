@@ -1,0 +1,17 @@
+term,expansion,weight
+LBP,low back pain,1.0
+PNA,pneumonia,1.0
+HTN,hypertension,1.0
+DM,diabetes mellitus,1.0
+T2DM,type 2 diabetes mellitus,1.0
+OA,osteoarthritis,1.0
+DJD,degenerative joint disease,1.0
+GERD,gastroesophageal reflux disease,1.0
+CKD,chronic kidney disease,1.0
+CAD,coronary artery disease,1.0
+COPD,chronic obstructive pulmonary disease,1.0
+CHF,congestive heart failure,1.0
+UTI,urinary tract infection,1.0
+URI,upper respiratory infection,1.0
+SOB,shortness of breath,1.0
+CP,chest pain,1.0

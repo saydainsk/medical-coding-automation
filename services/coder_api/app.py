@@ -1,20 +1,39 @@
-from pathlib import Path
-import os
+# ruff: noqa: E402
+"""FastAPI app for medical coder API."""
+
+from __future__ import annotations
+
 import logging
+import os
+import sys
+from pathlib import Path
 from typing import List, Tuple
+
+# Ensure project root is on sys.path before importing project-local packages
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse, Response
 from prometheus_fastapi_instrumentator import Instrumentator
 from asgi_correlation_id import CorrelationIdMiddleware
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-from .schemas import PredictRequest, PredictResponse, CodeCandidate
-from nlp.preprocess import sectionize, is_negated, extract_rationales
+from .schemas import CodeCandidate, PredictRequest, PredictResponse
+from nlp.preprocess import (
+    expand_abbrev,
+    extract_rationales,
+    is_negated,
+    load_abbrev,
+    sectionize,
+)
+from .postprocess_icd10 import postprocess_candidates
 
 load_dotenv()
 APP_VERSION = "retrieval-baseline-0.2.3"
@@ -27,16 +46,49 @@ logging.basicConfig(
 log = logging.getLogger("medical-coding-api")
 
 # ---------- Load codebook ----------
-CODEBOOK_PATH = os.getenv("CODEBOOK_PATH") or (
+from pathlib import Path
+
+# --- Resolve codebook path (always end up with a Path) ---
+_env = os.getenv("CODEBOOK_PATH", "").strip().strip('"').strip("'")
+_default = (
     Path(__file__).resolve().parents[2] / "data" / "codebooks" / "icd10cm_codes.csv"
 )
-codes_df = pd.read_csv(CODEBOOK_PATH)
 
+CODEBOOK_PATH: Path = Path(_env) if _env else _default
+
+if not CODEBOOK_PATH.exists():
+    raise FileNotFoundError(f"Codebook CSV not found at: {CODEBOOK_PATH}")
+
+# Pylance-friendly call (str() is fine for pandas & avoids path-type warnings)
+codes_df = pd.read_csv(str(CODEBOOK_PATH))
+
+
+# Safely access optional columns (returns empty strings when column is absent)
+def _safe(col: str) -> pd.Series:
+    if col in codes_df.columns:
+        return codes_df[col].fillna("").astype(str)
+    # fallback: empty series of correct length
+    return pd.Series([""] * len(codes_df), dtype="string")
+
+
+# Enrich the retriever text with synonyms & includes_terms
 code_texts: List[str] = (
-    codes_df["long_title"].fillna("") + " " + codes_df["short_title"].fillna("")
+    _safe("long_title")
+    + " "
+    + _safe("short_title")
+    + " "
+    + _safe("includes_terms")
+    + " "
+    + _safe("synonyms")
 ).tolist()
+
 vectorizer = TfidfVectorizer(ngram_range=(1, 2), min_df=1)
 code_matrix = vectorizer.fit_transform(code_texts)
+
+# Build a quick code→index lookup for remaps
+_CODE_TO_IDX = {
+    str(row.code): i for i, row in codes_df.reset_index(drop=True).iterrows()
+}
 
 # ---------- FastAPI app ----------
 app = FastAPI(title="Medical Coding API", version=APP_VERSION)
@@ -67,6 +119,8 @@ def require_api_key(x_api_key: str = Header(None, alias="x-api-key")):
 
 # ---------- Core logic ----------
 def retrieve_candidates(note: str, top_k: int) -> List[Tuple[int, float]]:
+    # Expand abbreviations (LBP→low back pain, HTN→hypertension, etc.)
+    note = expand_abbrev(note, load_abbrev(os.getenv("ABBREV_PATH")))
     secs = sectionize(note)
     weights: List[float] = []
     texts: List[str] = []
@@ -89,16 +143,30 @@ def retrieve_candidates(note: str, top_k: int) -> List[Tuple[int, float]]:
     lowered = note.lower()
     penalties = np.ones_like(scores)
     for i, row in codes_df.iterrows():
-        terms = [t for t in row["short_title"].lower().split() if len(t) > 3]
+        st = (row.get("short_title") or "").lower()
+        terms = [t for t in st.split() if len(t) > 3]
         if any(is_negated(t, lowered) for t in terms[:3]):
-            penalties[i] = 0.3
+            penalties[i] = 0.0
     scores *= penalties
 
     order = np.argsort(-scores)
-    return [(int(i), float(scores[i])) for i in order[:top_k] if scores[i] > 0]
+    min_score = float(os.getenv("MIN_SCORE", "0.2"))
+    return [(int(i), float(scores[i])) for i in order if scores[i] >= min_score][:top_k]
 
 
 # ---------- Endpoints ----------
+@app.get("/", include_in_schema=False)
+def root():
+    # Redirect to interactive docs
+    return RedirectResponse(url="/docs")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    # Avoid noisy 404s from browsers asking for a favicon
+    return Response(status_code=204)
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -137,19 +205,52 @@ def predict(req: PredictRequest):
     topk = max(1, min(req.top_k, 20))
     idx_scores = retrieve_candidates(req.note_text, topk)
 
+    # Build a minimal candidate list (code + score) to feed the post-processor
+    prelim = [
+        {
+            "code": str(codes_df.iloc[i]["code"]),
+            "score": float(round(s, 4)),
+        }
+        for i, s in idx_scores
+    ]
+
+    # 🔗 Pass codes_df into the post-processor (this may remap codes & drop dups)
+    processed = postprocess_candidates(prelim, req.note_text, codes_df)
+
+    # Now rebuild the final response items with accurate titles & rationales
     cands: List[CodeCandidate] = []
-    for i, s in idx_scores:
-        row = codes_df.iloc[i]
-        key_terms = [w for w in row["short_title"].split() if len(w) > 3][:4]
+    from nlp.preprocess import tokenize
+
+    for c in processed:
+        code = c["code"]
+        score = float(c.get("score", 0.0))
+
+        # Find the row for the (possibly remapped) code
+        row_match = codes_df.loc[codes_df["code"] == code]
+        if row_match.empty:
+            # If a code isn't in the codebook (shouldn't happen), skip it safely
+            continue
+        row = row_match.iloc[0]
+
+        short_title = row.get("short_title") or ""
+        key_terms = [w for w in tokenize(short_title) if len(w) > 3][:4]
         spans = extract_rationales(req.note_text, key_terms)
+
         cands.append(
             CodeCandidate(
-                code=row["code"],
-                title=row["long_title"],
-                score=round(s, 4),
+                code=code,
+                title=row.get("long_title") or "",
+                score=score,
                 rationale_spans=spans,
             )
         )
 
+        if len(cands) >= topk:
+            break  # maintain top_k if postprocessing reduced/merged items
+
     log.info("predicted", extra={"top_k": topk, "num_candidates": len(cands)})
-    return PredictResponse(candidates=cands, model_version=APP_VERSION)
+    return PredictResponse(
+        candidates=cands,
+        model_version=APP_VERSION,
+        postprocess_version="icd10cm-remap-v1",
+    )

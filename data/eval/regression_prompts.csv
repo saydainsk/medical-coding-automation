@@ -1,0 +1,43 @@
+id,category,note_text,expected_primary,expected_any_of,expected_all,must_not,top_k
+LBP-001,lbp,Low back pain.,M54.50,,,,5
+LBP-002,lbp,Vertebrogenic low back pain.,M54.51,,,,5
+LBP-003,lbp,Mechanical low back pain.,M54.59,,,,5
+LBP-004,lbp,Lumbago.,M54.50,,,,5
+LBP-005,lbp,Backache in the lumbar region.,M54.50,,,,5
+NEG-006,negation,Denies back pain.,,,,M54.5;M54.50;M54.51;M54.59,5
+NEG-007,negation,"Low back pain, denies pneumonia.",,M54.50;M54.59,,J18.9,5
+NEG-008,negation,No evidence of pneumonia.,,,,J18.9,5
+NEG-009,negation,ROS negative for cough or pneumonia.,,,,J18.9,5
+NEG-010,negation,"History of pneumonia last year, asymptomatic now.",,,,J18.9,5
+PNA-011,pneumonia,Right lower lobe pneumonia.,J18.9,,,,5
+PNA-012,pneumonia,Chest infection with fever and consolidation on CXR.,J18.9,,,,5
+PNA-013,pneumonia,Suspect pneumonia vs viral URI.,,J18.9,,,5
+HTN-014,htn,Essential (primary) hypertension.,I10,,,,5
+HTN-015,htn,"HTN, BP 160/95 today.",I10,,,,5
+HTN-016,htn,"Elevated BP today, no diagnosis yet.",,,,I10,5
+DM2-017,t2dm,Type 2 diabetes mellitus without complications.,E11.9,,,,5
+DM2-018,t2dm,T2DM on metformin.,E11.9,,,,5
+DM2-019,t2dm,Family history of diabetes.,,,,E11.9,5
+DM2-020,t2dm,"A1C 8.1, on insulin; type 2 DM.",E11.9,,,,5
+KNEE-021,knee_pain,Pain in right knee.,M25.561,,,,5
+KNEE-022,knee_pain,Left knee pain since yesterday.,M25.562,,,,5
+KNEE-023,knee_pain,Knee pain after activity.,M25.569,,,,5
+KNEE-024,knee_pain,"R knee pain, swelling.",M25.561,,,,5
+KNEE-025,knee_pain,L knee arthralgia after a run.,M25.562,,,,5
+ABBR-026,abbrev,LBP improving with NSAIDs.,,M54.50,,,5
+ABBR-027,abbrev,"PNA likely—productive cough, rales.",,J18.9,,,5
+ABBR-028,abbrev,"HTN and T2DM, stable on meds.",,,I10;E11.9,,8
+ABBR-029,abbrev,Chest infection not responding to outpt therapy.,,J18.9,,,5
+ABBR-030,abbrev,Lumbar back pain radiating to leg.,,M54.59;M54.50,,,5
+MISS-031,misspell,peumonia suspected based on xray.,,J18.9,,,5
+MISS-032,misspell,vertabrogenic low back pain.,,M54.51;M54.50,,,5
+MISS-033,misspell,Back pain? patient says no.,,,,M54.5;M54.50;M54.51;M54.59,5
+SECT-034,sections,"Assessment: Low back pain, unspecified.
+Plan: NSAIDs, PT.",M54.50,,,,5
+SECT-035,sections,"HPI: cough and fever
+Assessment: Pneumonia, start antibiotics
+Plan: amoxicillin",J18.9,,,,5
+MIX-036,mixed,"Essential HTN, T2DM; denies pneumonia.",,,I10;E11.9,J18.9,8
+MIX-037,mixed,LBP and knee pain (left).,,M54.50;M54.59,M25.562,,8
+NOC-038,no_code,"Follow up after pneumonia last year, asymptomatic now.",,,,J18.9,5
+NOC-039,no_code,"Family history of HTN, patient normotensive.",,,,I10,5
