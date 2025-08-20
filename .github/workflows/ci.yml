@@ -2,68 +2,43 @@ name: CI
 on: [push, pull_request]
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     env:
-      PYTHONPATH: ${{ github.workspace }}   # ensure 'services' package resolves
+      CODEBOOK_PATH: data/codebooks/icd10cm_codes_enriched_sample.csv
+
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          python-version: "3.11"
 
-      - name: Upgrade build tooling
-        run: python -m pip install --upgrade pip setuptools wheel
+      - name: Install deps
+        run: |
+          python -m pip install -U pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt || true
 
-      - name: Install dependencies (pinned)
-        run: pip install -r requirements.txt
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
 
-      - name: Show versions
+      - name: Verify ICD-10 codebook
         run: |
           python - <<'PY'
-          import sys, platform, pandas, numpy, sklearn, fastapi, pytest
-          print("python:", sys.version)
-          print("platform:", platform.platform())
-          print("pandas:", pandas.__version__)
-          print("numpy:", numpy.__version__)
-          print("sklearn:", sklearn.__version__)
-          print("fastapi:", fastapi.__version__)
-          print("pytest:", pytest.__version__)
-          PY
-
-      - name: Show workspace tree (debug)
-        run: |
-          echo "PWD: $(pwd)"
-          ls -la
-          echo "---- data/codebooks ----"
-          ls -la data || true
-          ls -la data/codebooks || true
-
-      - name: Validate codebook CSV
-        run: |
-          python - <<'PY'
-          import pandas as pd, pathlib
-          p = pathlib.Path("data/codebooks/icd10cm_codes.csv")
-          print("CSV exists:", p.exists(), "->", p)
+          import os, pathlib, pandas as pd
+          p = pathlib.Path(os.environ["CODEBOOK_PATH"])
+          print("Using:", p, "exists:", p.exists())
           df = pd.read_csv(p)
-          assert {"code","short_title","long_title"} <= set(df.columns)
+          required = {"code","short_title","long_title"}
+          missing = required - set(df.columns)
+          if missing:
+              raise SystemExit(f"Missing columns: {missing}")
           print("CSV rows:", len(df))
           PY
 
-      - name: Import app & show DATA_PATH
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          import services.coder_api.app as app
-          print("APP_VERSION:", getattr(app, "APP_VERSION", "?"))
-          data_path = Path(app.__file__).resolve().parents[2] / "data" / "codebooks" / "icd10cm_codes.csv"
-          print("Computed DATA_PATH:", data_path, "exists:", data_path.exists())
-          PY
-
-      - name: Test discovery
-        run: pytest -q --collect-only
-
       - name: Run tests
-        run: pytest -q -vv
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: pytest -q
