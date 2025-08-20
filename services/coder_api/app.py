@@ -7,8 +7,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import List, Tuple
-from typing import Optional
+from typing import List, Tuple, Optional
 
 # Ensure project root is on sys.path before importing project-local packages
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,21 +46,35 @@ logging.basicConfig(
 log = logging.getLogger("medical-coding-api")
 
 # ---------- Load codebook ----------
-from pathlib import Path
+# Prefer enriched sample; allow override via CODEBOOK_PATH (no legacy fallback).
+env_path = os.getenv("CODEBOOK_PATH", "").strip().strip('"').strip("'")
+candidates: List[Path] = []
+if env_path:
+    candidates.append(Path(env_path))
+candidates += [
+    ROOT / "data" / "codebooks" / "icd10cm_codes_enriched_sample.csv",
+]
 
-# --- Resolve codebook path (always end up with a Path) ---
-_env = os.getenv("CODEBOOK_PATH", "").strip().strip('"').strip("'")
-_default = (
-    Path(__file__).resolve().parents[2] / "data" / "codebooks" / "icd10cm_codes.csv"
-)
+for p in candidates:
+    if p.exists():
+        CODEBOOK_PATH = p
+        break
+else:
+    raise FileNotFoundError(
+        "ICD-10 codebook not found. Tried $CODEBOOK_PATH and "
+        "data/codebooks/icd10cm_codes_enriched_sample.csv"
+    )
 
-CODEBOOK_PATH: Path = Path(_env) if _env else _default
-
-if not CODEBOOK_PATH.exists():
-    raise FileNotFoundError(f"Codebook CSV not found at: {CODEBOOK_PATH}")
-
-# Pylance-friendly call (str() is fine for pandas & avoids path-type warnings)
+log.info("Using codebook: %s", CODEBOOK_PATH)
 codes_df = pd.read_csv(str(CODEBOOK_PATH))
+
+# Validate expected columns early
+_required = {"code", "short_title", "long_title"}
+_missing = _required - set(codes_df.columns)
+if _missing:
+    raise ValueError(
+        f"Codebook missing required columns: {_missing} (have {list(codes_df.columns)})"
+    )
 
 
 # Safely access optional columns (returns empty strings when column is absent)
@@ -86,7 +99,7 @@ code_texts: List[str] = (
 vectorizer = TfidfVectorizer(ngram_range=(1, 2), min_df=1)
 code_matrix = vectorizer.fit_transform(code_texts)
 
-# Build a quick code→index lookup for remaps
+# Build a quick code→index lookup for remaps (optional)
 _CODE_TO_IDX = {
     str(row.code): i for i, row in codes_df.reset_index(drop=True).iterrows()
 }
@@ -207,6 +220,7 @@ def codes(limit: int = 5):
     "/predict", response_model=PredictResponse, dependencies=[Depends(require_api_key)]
 )
 def predict(req: PredictRequest):
+    # Reject empty notes with Pydantic-style error list
     if not req.note_text or not req.note_text.strip():
         raise HTTPException(
             status_code=422,
@@ -222,14 +236,17 @@ def predict(req: PredictRequest):
     topk = max(1, min(req.top_k, 20))
     idx_scores = retrieve_candidates(req.note_text, topk)
 
-    # Build a minimal candidate list (code + score) to feed the post-processor
-    prelim = [
-        {
-            "code": str(codes_df.iloc[i]["code"]),
-            "score": float(round(s, 4)),
-        }
-        for i, s in idx_scores
-    ]
+    # Build candidate list including title so types align with postprocess (code/title/score)
+    prelim = []
+    for i, s in idx_scores:
+        row = codes_df.iloc[i]
+        prelim.append(
+            {
+                "code": str(row["code"]),
+                "title": str(row.get("long_title") or row.get("short_title") or ""),
+                "score": float(round(s, 4)),
+            }
+        )
 
     # 🔗 Pass codes_df into the post-processor (this may remap codes & drop dups)
     processed = postprocess_candidates(prelim, req.note_text, codes_df)
@@ -251,14 +268,26 @@ def predict(req: PredictRequest):
 
         short_title = row.get("short_title") or ""
         key_terms = [w for w in tokenize(short_title) if len(w) > 3][:4]
-        spans = extract_rationales(req.note_text, key_terms)
+
+        spans_raw = extract_rationales(req.note_text, key_terms)
+        norm_spans: List[Tuple[int, int]] = []
+        for s in spans_raw or []:
+            if isinstance(s, dict):
+                start = int(s.get("start", 0))
+                end = int(s.get("end", 0))
+                if end > start:
+                    norm_spans.append((start, end))
+            elif isinstance(s, (list, tuple)) and len(s) >= 2:
+                start, end = int(s[0]), int(s[1])
+                if end > start:
+                    norm_spans.append((start, end))
 
         cands.append(
             CodeCandidate(
                 code=code,
                 title=row.get("long_title") or "",
                 score=score,
-                rationale_spans=spans,
+                rationale_spans=norm_spans,
             )
         )
 

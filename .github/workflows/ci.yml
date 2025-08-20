@@ -53,10 +53,6 @@ jobs:
           ls -la data/codebooks || true
           echo "CODEBOOK_PATH=${CODEBOOK_PATH}"
 
-      # Optional but helpful if anything still references the legacy filename
-      - name: Back-compat symlink for legacy filename
-        run: ln -sf data/codebooks/icd10cm_codes_enriched_sample.csv data/codebooks/icd10cm_codes.csv
-
       - name: Validate codebook CSV
         run: |
           python - <<'PY'
