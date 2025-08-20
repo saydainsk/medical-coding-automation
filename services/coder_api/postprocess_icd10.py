@@ -1,4 +1,3 @@
-# services/coder_api/postprocess_icd10.py
 from __future__ import annotations
 
 import os
@@ -16,8 +15,8 @@ class CandidateDict(TypedDict):
 
 def load_default_codebook() -> pd.DataFrame:
     """
-    Load an ICD-10 codebook using CODEBOOK_PATH or sensible fallbacks.
-    Used when postprocess_candidates() is called without a codes_df.
+    Load an ICD-10 codebook using CODEBOOK_PATH or the enriched sample.
+    We DO NOT fall back to the legacy icd10cm_codes.csv to avoid CI/file drift.
     """
     root = Path(__file__).resolve().parents[2]
     env = os.getenv("CODEBOOK_PATH", "").strip().strip('"').strip("'")
@@ -25,14 +24,14 @@ def load_default_codebook() -> pd.DataFrame:
     candidates: list[Path] = []
     if env:
         candidates.append(Path(env))
-    candidates += [
-        root / "data" / "codebooks" / "icd10cm_codes_enriched_sample.csv",
-    ]
+    candidates.append(root / "data" / "codebooks" / "icd10cm_codes_enriched_sample.csv")
+
     for p in candidates:
         if p.exists():
             return pd.read_csv(str(p))
+
     raise FileNotFoundError(
-        "Could not locate ICD-10 codebook via CODEBOOK_PATH or defaults."
+        "Could not locate ICD-10 codebook via CODEBOOK_PATH or enriched sample."
     )
 
 
@@ -72,8 +71,8 @@ def _resolve_child(parent: str, codes_df: pd.DataFrame) -> str:
 
 def map_icd10(code: str, text: str) -> str:
     """
-    Minimal rule-based remaps to satisfy unit tests and common cases.
-    Currently handles M54.5 -> M54.50 (unspecified) or M54.51 (vertebrogenic).
+    Minimal rule-based remaps for tests/common cases.
+    Handles M54.5 -> M54.50 (unspecified) or M54.51 (vertebrogenic).
     """
     code = str(code)
     t = (text or "").lower()
@@ -89,14 +88,14 @@ def map_icd10(code: str, text: str) -> str:
 def postprocess_candidates(
     candidates: list[CandidateDict],
     note_text: str,
-    codes_df: pd.DataFrame | None = None,
+    codes_df: pd.DataFrame | None = None,  # <-- optional to satisfy tests
 ) -> list[CandidateDict]:
     """
     Backward-compatible postprocess:
       - If codes_df is None (older call sites/tests), load a default.
       - Apply rule-based remaps (map_icd10).
       - If result is non-billable/parent, resolve to an appropriate child.
-      - Refresh titles from codebook.
+      - Refresh titles from codebook when available.
       - Dedupe by code, keeping the highest score.
     """
     if codes_df is None:
