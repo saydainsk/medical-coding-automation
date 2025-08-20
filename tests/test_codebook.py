@@ -4,6 +4,7 @@ import pandas as pd
 
 
 def test_codebook_parses_and_has_columns():
+    # Respect CI env; default to your enriched sample
     path = Path(
         os.getenv("CODEBOOK_PATH", "data/codebooks/icd10cm_codes_enriched_sample.csv")
     )
