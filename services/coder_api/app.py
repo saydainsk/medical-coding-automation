@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 # Ensure project root is on sys.path before importing project-local packages
 ROOT = Path(__file__).resolve().parents[2]
@@ -46,21 +46,40 @@ logging.basicConfig(
 log = logging.getLogger("medical-coding-api")
 
 # ---------- Load codebook ----------
-from pathlib import Path
+# Prefer enriched sample; allow override via CODEBOOK_PATH; fall back to legacy name.
+env_path = os.getenv("CODEBOOK_PATH", "").strip().strip('"').strip("'")
 
-# --- Resolve codebook path (always end up with a Path) ---
-_env = os.getenv("CODEBOOK_PATH", "").strip().strip('"').strip("'")
-_default = (
-    Path(__file__).resolve().parents[2] / "data" / "codebooks" / "icd10cm_codes.csv"
-)
+candidates: List[Path] = []
+if env_path:
+    candidates.append(Path(env_path))
 
-CODEBOOK_PATH: Path = Path(_env) if _env else _default
+candidates += [
+    ROOT / "data" / "codebooks" / "icd10cm_codes_enriched_sample.csv",
+    ROOT / "data" / "codebooks" / "icd10cm_codes.csv",  # legacy fallback
+]
 
-if not CODEBOOK_PATH.exists():
-    raise FileNotFoundError(f"Codebook CSV not found at: {CODEBOOK_PATH}")
+for p in candidates:
+    if p.exists():
+        CODEBOOK_PATH = p
+        break
+else:
+    raise FileNotFoundError(
+        "ICD-10 codebook not found. Tried $CODEBOOK_PATH, "
+        "data/codebooks/icd10cm_codes_enriched_sample.csv, "
+        "and data/codebooks/icd10cm_codes.csv"
+    )
 
-# Pylance-friendly call (str() is fine for pandas & avoids path-type warnings)
+log.info("Using codebook: %s", CODEBOOK_PATH)
 codes_df = pd.read_csv(str(CODEBOOK_PATH))
+
+# Validate expected columns early
+_required = {"code", "short_title", "long_title"}
+_missing = _required - set(codes_df.columns)
+if _missing:
+    raise ValueError(
+        f"Codebook missing required columns: {_missing} "
+        f"(have {list(codes_df.columns)})"
+    )
 
 
 # Safely access optional columns (returns empty strings when column is absent)
@@ -85,7 +104,7 @@ code_texts: List[str] = (
 vectorizer = TfidfVectorizer(ngram_range=(1, 2), min_df=1)
 code_matrix = vectorizer.fit_transform(code_texts)
 
-# Build a quick code→index lookup for remaps
+# Build a quick code→index lookup for remaps (optional)
 _CODE_TO_IDX = {
     str(row.code): i for i, row in codes_df.reset_index(drop=True).iterrows()
 }
@@ -111,7 +130,7 @@ Instrumentator().instrument(app).expose(app, include_in_schema=False)
 
 
 # API key guard (optional; only enforced if API_KEY is set)
-def require_api_key(x_api_key: str = Header(None, alias="x-api-key")):
+def require_api_key(x_api_key: Optional[str] = Header(None, alias="x-api-key")):
     expected = os.getenv("API_KEY")
     if expected and x_api_key != expected:
         raise HTTPException(status_code=401, detail="Invalid API key")
@@ -234,14 +253,21 @@ def predict(req: PredictRequest):
 
         short_title = row.get("short_title") or ""
         key_terms = [w for w in tokenize(short_title) if len(w) > 3][:4]
-        spans = extract_rationales(req.note_text, key_terms)
+        spans_raw = extract_rationales(req.note_text, key_terms)
+
+        norm_spans: List[Tuple[int, int]] = []
+        for s in spans_raw or []:
+            if isinstance(s, dict):
+                norm_spans.append((int(s.get("start", 0)), int(s.get("end", 0))))
+            elif isinstance(s, (list, tuple)) and len(s) >= 2:
+                norm_spans.append((int(s[0]), int(s[1])))
 
         cands.append(
             CodeCandidate(
                 code=code,
                 title=row.get("long_title") or "",
                 score=score,
-                rationale_spans=spans,
+                rationale_spans=norm_spans,
             )
         )
 
