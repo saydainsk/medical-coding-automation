@@ -5,20 +5,31 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      PYTHONPATH: ${{ github.workspace }}   # ensure 'services' package resolves
+      PYTHONPATH: ${{ github.workspace }} # ensure 'services' package resolves
+      CODEBOOK_PATH: data/codebooks/icd10cm_codes_enriched_sample.csv
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          python-version: "3.11"
+          cache: "pip"
 
       - name: Upgrade build tooling
         run: python -m pip install --upgrade pip setuptools wheel
 
-      - name: Install dependencies (pinned)
-        run: pip install -r requirements.txt
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          pip install ruff
+
+      - name: Lint
+        run: |
+          python -m ruff --version
+          python -m ruff check .
+          python -m ruff format --check .
 
       - name: Show versions
         run: |
@@ -40,26 +51,38 @@ jobs:
           echo "---- data/codebooks ----"
           ls -la data || true
           ls -la data/codebooks || true
+          echo "CODEBOOK_PATH=${CODEBOOK_PATH}"
 
       - name: Validate codebook CSV
         run: |
           python - <<'PY'
-          import pandas as pd, pathlib
-          p = pathlib.Path("data/codebooks/icd10cm_codes.csv")
+          import os, pandas as pd, pathlib
+          p = pathlib.Path(os.environ["CODEBOOK_PATH"])
           print("CSV exists:", p.exists(), "->", p)
           df = pd.read_csv(p)
-          assert {"code","short_title","long_title"} <= set(df.columns)
+          required = {"code","short_title","long_title"}
+          missing = required - set(df.columns)
+          if missing:
+              raise SystemExit(f"Missing columns: {missing} (have {list(df.columns)})")
           print("CSV rows:", len(df))
           PY
 
-      - name: Import app & show DATA_PATH
+      - name: Import app & show codebook used
         run: |
           python - <<'PY'
           from pathlib import Path
           import services.coder_api.app as app
           print("APP_VERSION:", getattr(app, "APP_VERSION", "?"))
-          data_path = Path(app.__file__).resolve().parents[2] / "data" / "codebooks" / "icd10cm_codes.csv"
-          print("Computed DATA_PATH:", data_path, "exists:", data_path.exists())
+          app_path = getattr(app, "CODEBOOK_PATH", None)
+          if app_path is not None:
+              try:
+                  p = Path(app_path)
+              except TypeError:
+                  # If already a Path-like or something odd, coerce to str then Path
+                  p = Path(str(app_path))
+              print("App CODEBOOK_PATH:", p, "exists:", p.exists())
+          else:
+              print("App CODEBOOK_PATH not exposed on module.")
           PY
 
       - name: Test discovery
